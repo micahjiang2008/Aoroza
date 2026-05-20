@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use walkdir::WalkDir;
 
@@ -68,8 +68,8 @@ pub struct Note {
 
 pub struct AppState {
     pub app_config: RwLock<AppConfig>,
+    pub preview_file_path: RwLock<Option<String>>,
 }
-
 // ── Config paths ─────────────────────────────────────────────────────────
 
 fn config_dir() -> Result<PathBuf, String> {
@@ -320,6 +320,57 @@ fn get_notes_folder_path(state: &State<AppState>) -> Result<PathBuf, String> {
     let folder = state.app_config.read().map_err(|e| e.to_string())?
         .notes_folder.clone().ok_or("Notes folder not set".to_string())?;
     Ok(PathBuf::from(&folder))
+}
+
+// ── Preview mode data structures ───────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileContent {
+    pub path: String,
+    pub content: String,
+    pub title: String,
+    pub modified: i64,
+}
+
+fn validate_preview_path(path: &str) -> Result<PathBuf, String> {
+    let file_path = PathBuf::from(path);
+    match file_path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") => {}
+        _ => return Err("Only .md and .markdown files are allowed".to_string()),
+    }
+    let canonical = file_path.canonicalize().map_err(|e| format!("Cannot resolve file path: {}", e))?;
+    Ok(canonical)
+}
+
+fn create_preview_window(app: &tauri::AppHandle, file_path: &str) -> Result<(), String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    file_path.hash(&mut hasher);
+    let label = format!("preview-{:x}", hasher.finish());
+    if let Some(window) = app.get_webview_window(&label) {
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let filename = PathBuf::from(file_path)
+        .file_name().map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Preview".to_string());
+    // Use root URL — no query params (PathBuf on Windows mangles ? & characters)
+    let builder = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("/".into()))
+        .title(format!("{} \u{2014} SimpleMD", filename))
+        .inner_size(800.0, 600.0)
+        .min_inner_size(400.0, 300.0)
+        .resizable(true)
+        .decorations(true);
+    let window = builder.build().map_err(|e| format!("Failed to create preview window: {}", e))?;
+    // Open devtools automatically for debugging
+    let _ = window.open_devtools();
+    let win = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = win.set_focus();
+    });
+    Ok(())
 }
 
 // ── Tauri Commands ───────────────────────────────────────────────────────
@@ -615,6 +666,94 @@ async fn open_in_file_manager(path: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── Preview mode commands ───────────────────────────────────────────────
+
+#[tauri::command]
+fn read_file_direct(path: String) -> Result<FileContent, String> {
+    let canonical = validate_preview_path(&path)?;
+    if !canonical.is_file() { return Err(format!("Not a file: {}", path)); }
+    let content = std::fs::read_to_string(&canonical).map_err(|_| "Failed to read file".to_string())?;
+    let metadata = std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
+    let modified = metadata.modified().ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64).unwrap_or(0);
+    let title = extract_title(&content);
+    Ok(FileContent { path, content, title, modified })
+}
+
+#[tauri::command]
+fn save_file_direct(path: String, content: String) -> Result<FileContent, String> {
+    let canonical = validate_preview_path(&path)?;
+    if !canonical.is_file() { return Err(format!("Not a file: {}", path)); }
+    std::fs::write(&canonical, &content).map_err(|_| "Failed to write file".to_string())?;
+    let metadata = std::fs::metadata(&canonical).map_err(|_| "Failed to read metadata".to_string())?;
+    let modified = metadata.modified().ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64).unwrap_or(0);
+    let title = extract_title(&content);
+    Ok(FileContent { path, content, title, modified })
+}
+
+#[tauri::command]
+fn import_file_to_folder(
+    app: tauri::AppHandle,
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<NoteMetadata, String> {
+    let source = validate_preview_path(&path)?;
+    if !source.is_file() { return Err(format!("Not a file: {}", path)); }
+    let folder = {
+        let app_config = state.app_config.read().map_err(|e| e.to_string())?;
+        app_config.notes_folder.clone().ok_or("Notes folder not set".to_string())?
+    };
+    let folder_path = PathBuf::from(&folder);
+    let content = std::fs::read_to_string(&source).map_err(|_| "Failed to read source file".to_string())?;
+    let extracted_title = extract_title(&content);
+    let base_name = if extracted_title.trim().is_empty() {
+        source.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
+    } else {
+        sanitize_filename(&extracted_title)
+    };
+    let mut final_id = base_name.clone();
+    let mut counter = 1;
+    while abs_path_from_id(&folder_path, &final_id).map(|p| p.exists()).unwrap_or(false) {
+        final_id = format!("{}-{}", base_name, counter);
+        counter += 1;
+    }
+    let dest = abs_path_from_id(&folder_path, &final_id)?;
+    if let Some(parent) = dest.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    std::fs::copy(&source, &dest).map_err(|_| "Failed to copy file".to_string())?;
+    let modified = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64).unwrap_or(0);
+    let title = extract_title(&content);
+    let preview = generate_preview(&content);
+    let note = NoteMetadata { id: final_id, title, preview, modified };
+    let note_id = note.id.clone();
+    let _ = app.emit("select-note", &note_id);
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.show();
+        let _ = main_window.set_focus();
+    }
+    Ok(note)
+}
+
+#[tauri::command]
+fn open_file_preview(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+    if !file_path.exists() { return Err(format!("File not found: {}", path)); }
+    // Store the preview file path so the frontend can detect preview mode
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.preview_file_path.write().unwrap() = Some(path.clone());
+    }
+    create_preview_window(&app, &path)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_preview_file(state: State<'_, AppState>) -> Option<String> {
+    state.preview_file_path.read().unwrap().clone()
+}
+
 // ── Application entrypoint ───────────────────────────────────────────────
 
 pub fn run() {
@@ -627,7 +766,7 @@ pub fn run() {
             let _ = app.get_webview_window("main").map(|w| w.set_focus());
         }))
         .setup(|_app| {
-            _app.manage(AppState { app_config: RwLock::new(load_config()) });
+            _app.manage(AppState { app_config: RwLock::new(load_config()), preview_file_path: RwLock::new(None) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -638,6 +777,8 @@ pub fn run() {
             move_note, move_folder,
             preview_note_name, get_default_ignored_patterns,
             open_folder_dialog, open_in_file_manager, copy_to_clipboard,
+            read_file_direct, save_file_direct, import_file_to_folder,
+            open_file_preview, get_preview_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -314,12 +314,15 @@ export function CommandPalette({
       shortcut: cmd.shortcut,
       icon: cmd.icon,
       action: cmd.action,
+      preview: undefined as string | undefined,
     }));
     const noteItems = notes.slice(0, 10).map((note) => ({
       type: "note" as const,
       id: note.id,
       label: cleanTitle(note.title),
       preview: note.preview,
+      shortcut: undefined as string | undefined,
+      icon: undefined as ReactNode | undefined,
       action: () => {
         selectNote(note.id);
         onClose();
@@ -336,6 +339,20 @@ export function CommandPalette({
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
+
+  // Global keyboard listener: Escape closes the palette
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handler as EventListener, { capture: true });
+    return () => window.removeEventListener("keydown", handler as EventListener, { capture: true });
+  }, [open, onClose]);
 
   // Reset selection when items change
   useEffect(() => {
@@ -385,7 +402,10 @@ export function CommandPalette({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4 pointer-events-none">
+    <>
+      {/* Backdrop overlay */}
+      <div className="fixed inset-0 z-40 bg-black/40 pointer-events-auto" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4 pointer-events-none">
       <div className="relative w-full max-w-2xl bg-bg rounded-xl shadow-2xl overflow-hidden border border-border animate-slide-down flex flex-col pointer-events-auto">
         {/* Search input */}
         <div className="border-b border-border flex-none">
@@ -412,50 +432,48 @@ export function CommandPalette({
             </div>
           ) : (
             <>
-              {filteredCommands.length > 0 && (
+              {allItems.some((item) => item.type === "command") && (
                 <div className="space-y-0.5 mb-5">
                   <div className="text-sm font-medium text-text-muted px-2.5 py-1.5">
                     Commands
                   </div>
-                  {filteredCommands.map((cmd, i) => (
-                    <div key={cmd.id} data-index={i}>
-                      <CommandItem
-                        label={cmd.label}
-                        shortcut={cmd.shortcut}
-                        icon={cmd.icon}
-                        isSelected={selectedIndex === i}
-                        onClick={cmd.action}
-                      />
-                    </div>
-                  ))}
+                  {allItems.map((item, i) =>
+                    item.type === "command" ? (
+                      <div key={item.id} data-index={i}>
+                        <CommandItem
+                          label={item.label}
+                          shortcut={item.shortcut}
+                          icon={item.icon}
+                          isSelected={selectedIndex === i}
+                          onClick={item.action}
+                        />
+                      </div>
+                    ) : null
+                  )}
                 </div>
               )}
-              {notes.length > 0 && (
+              {allItems.some((item) => item.type === "note") && (
                 <div className="space-y-0.5">
                   <div className="text-sm font-medium text-text-muted px-2.5 py-1.5">
                     Notes
                   </div>
-                  {notes.slice(0, 10).map((note, i) => {
-                    const index = filteredCommands.length + i;
-                    const title = cleanTitle(note.title);
-                    const firstLetter = title.charAt(0).toUpperCase();
-                    const cleanSubtitle = note.preview
-                      ?.replace(/&nbsp;/g, " ")
-                      .replace(/\u00A0/g, " ")
-                      .trim();
-                    return (
-                      <div key={note.id} data-index={index}>
+                  {allItems.map((item, i) =>
+                    item.type === "note" ? (
+                      <div key={item.id} data-index={i}>
                         <CommandItem
-                          label={title}
-                          subtitle={cleanSubtitle}
-                          iconText={firstLetter}
+                          label={item.label}
+                          subtitle={item.preview
+                            ?.replace(/&nbsp;/g, " ")
+                            .replace(/\u00A0/g, " ")
+                            .trim()}
+                          iconText={item.label.charAt(0).toUpperCase()}
                           variant="note"
-                          isSelected={selectedIndex === index}
-                          onClick={() => { selectNote(note.id); onClose(); }}
+                          isSelected={selectedIndex === i}
+                          onClick={item.action}
                         />
                       </div>
-                    );
-                  })}
+                    ) : null
+                  )}
                 </div>
               )}
             </>
@@ -463,5 +481,6 @@ export function CommandPalette({
         </div>
       </div>
     </div>
+    </>
   );
 }

@@ -367,7 +367,23 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     return getAvailableFonts(customFonts);
   }, [customFonts]);
 
-  if (!isInitialized) return null;
+  if (!isInitialized) {
+    // Render with defaults immediately (avoids blank page in preview mode)
+    return (
+      <ThemeContext.Provider
+        value={{
+          theme, resolvedTheme, setTheme, cycleTheme,
+          editorFontSettings, setEditorFontSetting, resetEditorFontSettings, reloadSettings,
+          textDirection, setTextDirection, editorWidth, setEditorWidth,
+          interfaceZoom, setInterfaceZoom, customEditorWidthPx, setCustomEditorWidthPx, setEditorMaxWidthLive,
+          customColorsLight, customColorsDark, setCustomColor, resetCustomColor, resetAllCustomColors,
+          customFonts, getAvailableFonts: getAvailableFontsCb,
+        }}
+      >
+        {children}
+      </ThemeContext.Provider>
+    );
+  }
 
   return (
     <ThemeContext.Provider

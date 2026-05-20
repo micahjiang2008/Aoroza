@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { ThemeProvider } from "./context/ThemeContext";
 import { NotesProvider, useNotes } from "./context/NotesContext";
 import { TooltipProvider, Toaster } from "./components/ui";
@@ -8,7 +10,27 @@ import { FolderPicker } from "./components/layout/FolderPicker";
 import { Editor } from "./components/editor/Editor";
 import { SettingsPage } from "./components/settings";
 import { CommandPalette } from "./components/command-palette/CommandPalette";
+import { PreviewApp } from "./components/preview/PreviewApp";
 import { SpinnerIcon } from "./components/icons";
+
+// Detect preview mode from window label (synchronous, no flicker)
+function isPreviewWindow(): boolean {
+  try {
+    return getCurrentWindow().label.startsWith("preview-");
+  } catch {
+    return false;
+  }
+}
+
+// Get preview file path via IPC (async)
+async function getPreviewFilePath(): Promise<string | null> {
+  try {
+    const file = await invoke<string | null>("get_preview_file");
+    return file;
+  } catch {
+    return null;
+  }
+}
 
 function AppContent() {
   const { notesFolder, isLoading } = useNotes();
@@ -79,6 +101,51 @@ function AppContent() {
 }
 
 function App() {
+  const isPreview = isPreviewWindow();
+  const [previewFile, setPreviewFile] = useState<string | null>(null);
+
+  // Fetch the preview file path on mount
+  useEffect(() => {
+    if (isPreview) {
+      getPreviewFilePath().then(setPreviewFile).catch(() => setPreviewFile(null));
+    }
+  }, [isPreview]);
+
+  // Cmd/Ctrl+W — close window (works in both preview and folder mode)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "w") {
+        e.preventDefault();
+        getCurrentWindow().close().catch(console.error);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Preview mode: lightweight editor without sidebar, search, git
+  if (isPreview) {
+    if (previewFile === null) {
+      // Still loading the file path — show spinner
+      return (
+        <ThemeProvider>
+          <div className="h-full min-h-0 flex items-center justify-center bg-bg text-text-muted">
+            <SpinnerIcon className="w-5 h-5 animate-spin stroke-[1.5]" />
+          </div>
+        </ThemeProvider>
+      );
+    }
+    return (
+      <ThemeProvider>
+        <Toaster />
+        <TooltipProvider>
+          <PreviewApp filePath={previewFile} />
+        </TooltipProvider>
+      </ThemeProvider>
+    );
+  }
+
+  // Folder mode: full app with sidebar, etc.
   return (
     <ThemeProvider>
       <TooltipProvider>

@@ -23,7 +23,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { mod, shift, alt, isMac } from "../../lib/platform";
-import { useNotes } from "../../context/NotesContext";
+import { useOptionalNotes } from "../../context/NotesContext";
 import { useTheme } from "../../context/ThemeContext";
 import { Frontmatter } from "./Frontmatter";
 import { BlockMathEditor } from "./BlockMathEditor";
@@ -46,7 +46,7 @@ import {
   LinkIcon, ImageIcon, TableIcon,
   SpinnerIcon, CircleCheckIcon, CopyIcon, ShareIcon,
   MarkdownIcon, MarkdownOffIcon, PanelLeftIcon,
-  SearchIcon, DownloadIcon, BracketsIcon,
+  SearchIcon, DownloadIcon, BracketsIcon, FolderPlusIcon,
 } from "../icons";
 
 function formatDateTime(timestamp: number): string {
@@ -75,10 +75,25 @@ function isAllowedUrlScheme(url: string): boolean {
 
 const searchHighlightPluginKey = new PluginKey("searchHighlight");
 
+export interface PreviewModeData {
+  content: string | null;
+  title: string;
+  filePath: string;
+  modified: number;
+  hasExternalChanges: boolean;
+  reloadVersion: number;
+  save: (content: string) => Promise<void>;
+  reload: () => Promise<void>;
+}
+
 interface EditorProps {
   onToggleSidebar?: () => void;
   sidebarVisible?: boolean;
+  focusMode?: boolean;
+  previewMode?: PreviewModeData;
   onEditorReady?: (editor: TiptapEditor | null) => void;
+  onSaveToFolder?: () => void;
+  saveToFolderDisabled?: boolean;
 }
 
 // GridPicker component for table insertion
@@ -119,8 +134,25 @@ function GridPicker({ onSelect }: GridPickerProps) {
   );
 }
 
-export function Editor({ onToggleSidebar, sidebarVisible, onEditorReady }: EditorProps) {
-  const { currentNote, saveNote, selectedNoteId, createNote } = useNotes();
+export function Editor({
+  onToggleSidebar,
+  sidebarVisible,
+  onEditorReady,
+  previewMode,
+  onSaveToFolder,
+  saveToFolderDisabled,
+}: EditorProps) {
+  const notesCtx = useOptionalNotes();
+  const currentNote = previewMode
+    ? previewMode.content !== null
+      ? { id: previewMode.filePath, title: previewMode.title, content: previewMode.content, path: previewMode.filePath, modified: previewMode.modified }
+      : null
+    : (notesCtx?.currentNote ?? null);
+  const saveNote = previewMode
+    ? async (content: string, _noteId?: string) => { await previewMode.save(content); }
+    : notesCtx!.saveNote;
+  const selectedNoteId = previewMode ? previewMode.filePath : (notesCtx?.selectedNoteId ?? null);
+  const createNote = notesCtx?.createNote;
   const { textDirection } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
   const [, setSelectionKey] = useState(0);
@@ -630,6 +662,17 @@ export function Editor({ onToggleSidebar, sidebarVisible, onEditorReady }: Edito
   const isActive = (check: (e: TiptapEditor) => boolean) => editor ? check(editor) : false;
 
   if (!currentNote) {
+    // Preview mode: show loading state (content not yet loaded)
+    if (previewMode) {
+      return (
+        <div className="flex-1 flex flex-col bg-bg">
+          <div className="h-10 shrink-0 flex items-end px-4 pb-1" data-tauri-drag-region></div>
+          <div className="flex-1 flex items-center justify-center">
+            <SpinnerIcon className="w-6 h-6 text-text-muted animate-spin" />
+          </div>
+        </div>
+      );
+    }
     // A note is selected but not yet loaded — show loading spinner
     if (selectedNoteId) {
       return (
@@ -648,20 +691,6 @@ export function Editor({ onToggleSidebar, sidebarVisible, onEditorReady }: Edito
         <div className="h-10 shrink-0 flex items-end px-4 pb-1" data-tauri-drag-region />
         <div className="flex-1 flex items-center justify-center pb-8">
           <div className="text-center text-text-muted select-none">
-            <div role="img" aria-label="Note"
-              className="w-42 aspect-square mx-auto mb-1"
-              style={{
-                backgroundColor: "var(--color-text)",
-                WebkitMaskImage: "url(/note-dark.png)",
-                WebkitMaskSize: "contain",
-                WebkitMaskRepeat: "no-repeat",
-                WebkitMaskPosition: "center",
-                maskImage: "url(/note-dark.png)",
-                maskSize: "contain",
-                maskRepeat: "no-repeat",
-                maskPosition: "center",
-              }}
-            />
             <h1 className="text-2xl text-text font-serif mb-1 tracking-[-0.01em]">
               What's on your mind?
             </h1>
@@ -799,6 +828,21 @@ export function Editor({ onToggleSidebar, sidebarVisible, onEditorReady }: Edito
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          {onSaveToFolder && (
+            <Tooltip content="Save in Folder">
+              <IconButton
+                onClick={onSaveToFolder}
+                aria-label="Save in Folder"
+                disabled={saveToFolderDisabled}
+              >
+                {saveToFolderDisabled ? (
+                  <SpinnerIcon className="w-4.25 h-4.25 animate-spin" />
+                ) : (
+                  <FolderPlusIcon className="w-4.25 h-4.25 stroke-[1.6]" />
+                )}
+              </IconButton>
+            </Tooltip>
+          )}
         </div>
       </div>
 

@@ -48,13 +48,23 @@ function AppContent() {
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
 
-  // Cmd+P / Ctrl+P to open command palette
+  // Cmd+P / Ctrl+P to open command palette; Ctrl+B to toggle sidebar (only when editor not focused)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "p") {
         e.preventDefault();
         e.stopPropagation();
         setPaletteOpen(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+        // Only toggle sidebar if the editor is not focused (ProseMirror handles Ctrl+B for bold)
+        const el = document.activeElement;
+        if (el && !el.closest(".ProseMirror")) {
+          e.preventDefault();
+          e.stopPropagation();
+          setSidebarVisible((v) => !v);
+        }
       }
     };
     window.addEventListener("keydown", handler);

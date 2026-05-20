@@ -34,21 +34,21 @@ export function FolderPicker() {
             className="text-3xl text-text font-serif mb-2 tracking-[-0.01em] animate-fade-in-up"
             style={{ animationDelay: "100ms" }}
           >
-            Welcome to SimpleMD
+            Let's get started
           </h1>
           <p
             className="text-text-muted mb-6 animate-fade-in-up"
             style={{ animationDelay: "100ms" }}
           >
-            SimpleMD is an offline-first markdown editor. Your notes are simply
-            stored on your computer as markdown files.
+            SimpleMD stores your notes as plain markdown files on your computer.
+            Just pick a folder to begin.
           </p>
           <div
             className="animate-fade-in-up"
             style={{ animationDelay: "200ms" }}
           >
             <Button onClick={handleSelectFolder} size="xl">
-              Choose your notes folder
+              Choose a folder
             </Button>
           </div>
 

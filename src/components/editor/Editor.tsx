@@ -692,16 +692,16 @@ export function Editor({
         <div className="flex-1 flex items-center justify-center pb-8">
           <div className="text-center text-text-muted select-none">
             <h1 className="text-2xl text-text font-serif mb-1 tracking-[-0.01em]">
-              What's on your mind?
+              No note selected
             </h1>
             <p className="text-sm">
-              Pick up where you left off, or start something new
+              Select a note from the sidebar or create a new one
             </p>
             {createNote && (
               <button onClick={createNote}
                 className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium
                   bg-bg-emphasis text-text hover:bg-bg-muted border border-border transition-colors">
-                New Note <span className="text-text-muted ml-1">{mod}{isMac ? "" : "+"}N</span>
+                New Note
               </button>
             )}
           </div>
@@ -754,7 +754,7 @@ export function Editor({
         <div className="titlebar-no-drag flex items-center gap-1 min-w-0">
           {onToggleSidebar && (
             <IconButton onClick={onToggleSidebar}
-              title={sidebarVisible ? `Hide sidebar (${mod}${isMac ? "" : "+"}\\)` : `Show sidebar (${mod}${isMac ? "" : "+"}\\)`}
+              title={sidebarVisible ? `Hide sidebar (${mod}${isMac ? "" : "+"}B)` : `Show sidebar (${mod}${isMac ? "" : "+"}B)`}
               className="shrink-0">
               <PanelLeftIcon className="w-4.5 h-4.5 stroke-[1.5]" />
             </IconButton>

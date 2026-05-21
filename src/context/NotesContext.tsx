@@ -20,7 +20,7 @@ interface NotesContextValue {
   selectNote: (id: string) => Promise<void>;
   createNote: () => Promise<void>;
   createNoteInFolder: (folderPath: string) => Promise<void>;
-  saveNote: (content: string) => Promise<void>;
+  saveNote: (content: string) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<void>;
   duplicateNote: (id: string) => Promise<void>;
   refreshNotes: () => Promise<void>;
@@ -34,6 +34,10 @@ interface NotesContextValue {
 }
 
 const NotesContext = createContext<NotesContextValue | null>(null);
+
+function isBlankDraft(content: string): boolean {
+  return content.replace(/&nbsp;|&#160;/g, " ").trim().length === 0;
+}
 
 export function useNotes() {
   const context = useContext(NotesContext);
@@ -121,18 +125,23 @@ export function NotesProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveNote = useCallback(async (content: string) => {
-    if (!selectedNoteId) return;
+    if (!selectedNoteId && isBlankDraft(content)) return null;
     try {
       const updated = await notesService.saveNote(selectedNoteId, content);
       setCurrentNote(updated);
+      const shouldRefresh = updated.id !== selectedNoteId || !notes.some((note) => note.id === updated.id);
       if (updated.id !== selectedNoteId) {
         setSelectedNoteId(updated.id);
+      }
+      if (shouldRefresh) {
         await refreshNotes();
       }
+      return updated;
     } catch (err) {
       console.error("Failed to save note:", err);
+      return null;
     }
-  }, [selectedNoteId, refreshNotes]);
+  }, [notes, selectedNoteId, refreshNotes]);
 
   const createNoteCommon = useCallback(async (targetFolder?: string) => {
     try {

@@ -596,6 +596,36 @@ fn sanitize_filename(title: &str) -> String {
     }
 }
 
+fn next_available_note_id(folder: &Path, base: &str) -> Result<String, String> {
+    let leaf = sanitize_filename(base);
+    let mut new_id = leaf.clone();
+    let mut c = 1;
+    while abs_path_from_id(folder, &new_id)
+        .map(|p| p.exists())
+        .unwrap_or(false)
+    {
+        new_id = format!("{}-{}", leaf, c);
+        c += 1;
+    }
+    Ok(new_id)
+}
+
+fn next_available_note_id_from_template(folder: &Path, template: &str) -> Result<String, String> {
+    let expanded = expand_note_name_template(template);
+    if expanded.contains("{counter}") {
+        let mut c = 1;
+        loop {
+            let candidate = sanitize_filename(&expanded.replace("{counter}", &c.to_string()));
+            let path = abs_path_from_id(folder, &candidate)?;
+            if !path.exists() {
+                return Ok(candidate);
+            }
+            c += 1;
+        }
+    }
+    next_available_note_id(folder, &expanded)
+}
+
 fn ordinal_suffix(day: u32) -> &'static str {
     match (day % 100, day % 10) {
         (11..=13, _) => "th",
@@ -893,17 +923,17 @@ fn save_note(id: Option<String>, content: String, state: State<AppState>) -> Res
         let fp = abs_path_from_id(&folder, &existing_id)?;
         (existing_id, fp)
     } else {
-        // New note: compute filename from title
-        let leaf = sanitize_filename(&title);
-        let mut new_id = leaf.clone();
-        let mut c = 1;
-        while abs_path_from_id(&folder, &new_id)
-            .map(|p| p.exists())
-            .unwrap_or(false)
-        {
-            new_id = format!("{}-{}", leaf, c);
-            c += 1;
-        }
+        let settings = state
+            .app_config
+            .read()
+            .map_err(|e| e.to_string())?
+            .settings
+            .clone()
+            .unwrap_or_default();
+        let template = settings
+            .default_note_name
+            .unwrap_or_else(|| "Untitled".to_string());
+        let new_id = next_available_note_id_from_template(&folder, &template)?;
         let fp = abs_path_from_id(&folder, &new_id)?;
         (new_id, fp)
     };

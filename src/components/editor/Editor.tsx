@@ -76,6 +76,10 @@ function isAllowedUrlScheme(url: string): boolean {
   }
 }
 
+function isBlankMarkdown(content: string): boolean {
+  return content.replace(/&nbsp;|&#160;/g, " ").trim().length === 0;
+}
+
 const searchHighlightPluginKey = new PluginKey("searchHighlight");
 
 export interface PreviewModeData {
@@ -152,10 +156,9 @@ export function Editor({
       : null
     : (notesCtx?.currentNote ?? null);
   const saveNote = previewMode
-    ? async (content: string, _noteId?: string) => { await previewMode.save(content); }
+    ? async (content: string) => { await previewMode.save(content); return null; }
     : notesCtx!.saveNote;
   const selectedNoteId = previewMode ? previewMode.filePath : (notesCtx?.selectedNoteId ?? null);
-  const createNote = notesCtx?.createNote;
   const { textDirection } = useTheme();
   const [isSaving, setIsSaving] = useState(false);
   const [selectionKey, setSelectionKey] = useState(0);
@@ -248,10 +251,13 @@ export function Editor({
       } catch {}
     }, []);
 
-  const saveImmediately = useCallback(async (_noteId: string, content: string) => {
+  const saveImmediately = useCallback(async (content: string) => {
     setIsSaving(true);
     try {
-      await saveNote(content);
+      const saved = await saveNote(content);
+      if (saved) {
+        loadedNoteIdRef.current = saved.id;
+      }
     } finally {
       setIsSaving(false);
     }
@@ -262,24 +268,26 @@ export function Editor({
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
     }
-    if (needsSaveRef.current && editorRef.current && loadedNoteIdRef.current) {
+    if (needsSaveRef.current && editorRef.current) {
       needsSaveRef.current = false;
       const markdown = getMarkdown(editorRef.current);
-      await saveImmediately(loadedNoteIdRef.current, markdown);
+      const isDraft = !currentNoteIdRef.current;
+      if (isDraft && isBlankMarkdown(markdown)) return;
+      await saveImmediately(markdown);
     }
   }, [saveImmediately, getMarkdown]);
 
   const scheduleSave = useCallback(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    const savingNoteId = currentNote?.id;
-    if (!savingNoteId) return;
+    const savingNoteId = currentNote?.id ?? null;
     needsSaveRef.current = true;
     saveTimeoutRef.current = window.setTimeout(async () => {
       if (currentNoteIdRef.current !== savingNoteId || !needsSaveRef.current) return;
       if (editorRef.current) {
         needsSaveRef.current = false;
         const markdown = getMarkdown(editorRef.current);
-        await saveImmediately(savingNoteId, markdown);
+        if (!savingNoteId && isBlankMarkdown(markdown)) return;
+        await saveImmediately(markdown);
       }
     }, 500);
   }, [saveImmediately, getMarkdown, currentNote?.id]);
@@ -658,6 +666,23 @@ export function Editor({
   }, [editor, currentNote?.id]);
 
   useEffect(() => {
+    if (!editor || currentNote || selectedNoteId || previewMode) return;
+    if (loadedNoteIdRef.current === null) return;
+    loadedNoteIdRef.current = null;
+    needsSaveRef.current = false;
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    isSettingContentRef.current = true;
+    try {
+      editor.commands.clearContent();
+    } finally {
+      isSettingContentRef.current = false;
+    }
+  }, [editor, currentNote, selectedNoteId, previewMode]);
+
+  useEffect(() => {
     return () => { flushPendingSave(); };
   }, [flushPendingSave]);
 
@@ -733,50 +758,12 @@ export function Editor({
 
   const readingTime = Math.max(1, Math.ceil(charCount / 350));
 
-  if (!currentNote) {
-    // Preview mode: show loading state (content not yet loaded)
-    if (previewMode) {
-      return (
-        <div className="flex-1 flex flex-col bg-bg">
-          <div className="h-10 shrink-0 flex items-end px-4 pb-1" data-tauri-drag-region></div>
-          <div className="flex-1 flex items-center justify-center">
-            <SpinnerIcon className="w-6 h-6 text-text-muted animate-spin" />
-          </div>
-        </div>
-      );
-    }
-    // A note is selected but not yet loaded — show loading spinner
-    if (selectedNoteId) {
-      return (
-        <div className="flex-1 flex flex-col bg-bg">
-          <div className="h-10 shrink-0 flex items-end px-4 pb-1" data-tauri-drag-region />
-          <div className="flex-1 flex items-center justify-center">
-            <SpinnerIcon className="w-6 h-6 text-text-muted animate-spin" />
-          </div>
-        </div>
-      );
-    }
-
-    // No note selected: show empty state with "New Note" button
+  if (!currentNote && (previewMode || selectedNoteId)) {
     return (
       <div className="flex-1 flex flex-col bg-bg">
         <div className="h-10 shrink-0 flex items-end px-4 pb-1" data-tauri-drag-region />
-        <div className="flex-1 flex items-center justify-center pb-8">
-          <div className="text-center text-text-muted select-none">
-            <h1 className="text-2xl text-text font-serif mb-1 tracking-[-0.01em]">
-              No note selected
-            </h1>
-            <p className="text-sm">
-              Select a note from the sidebar or create a new one
-            </p>
-            {createNote && (
-              <button onClick={createNote}
-                className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium
-                  bg-bg-emphasis text-text hover:bg-bg-muted border border-border transition-colors">
-                New Note
-              </button>
-            )}
-          </div>
+        <div className="flex-1 flex items-center justify-center">
+          <SpinnerIcon className="w-6 h-6 text-text-muted animate-spin" />
         </div>
       </div>
     );
@@ -832,7 +819,7 @@ export function Editor({
             </IconButton>
           )}
           <span className="text-xs text-text-muted mb-px truncate">
-            {formatDateTime(currentNote.modified)}
+            {currentNote ? formatDateTime(currentNote.modified) : "Draft"}
           </span>
         </div>
 

@@ -818,9 +818,11 @@ export function Editor({
               <PanelLeftIcon className="w-4.5 h-4.5 stroke-[1.5]" />
             </IconButton>
           )}
-          <span className="text-xs text-text-muted mb-px truncate">
-            {currentNote ? formatDateTime(currentNote.modified) : "Draft"}
-          </span>
+          {currentNote && (
+            <span className="text-xs text-text-muted mb-px truncate">
+              {formatDateTime(currentNote.modified)}
+            </span>
+          )}
         </div>
 
         <div className="titlebar-no-drag flex items-center gap-px shrink-0">

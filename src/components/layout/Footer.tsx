@@ -9,7 +9,7 @@ interface FooterProps {
 export const Footer = memo(function Footer({ onOpenSettings }: FooterProps) {
   return (
     <div className="shrink-0 border-t border-border">
-      <div className="flex items-center justify-end px-3 py-2">
+      <div className="flex items-center justify-start px-3 py-2">
         {onOpenSettings && (
           <IconButton onClick={onOpenSettings} title="Settings">
             <SettingsIcon className="w-4.5 h-4.5 stroke-[1.5]" />

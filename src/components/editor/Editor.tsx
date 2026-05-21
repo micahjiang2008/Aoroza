@@ -174,6 +174,7 @@ export function Editor({
   const needsSaveRef = useRef(false);
   const loadedNoteIdRef = useRef<string | null>(null);
   const sourceTimeoutRef = useRef<number | null>(null);
+  const isSettingContentRef = useRef(false);
 
   currentNoteIdRef.current = currentNote?.id ?? null;
 
@@ -521,7 +522,7 @@ export function Editor({
     if (!currentNote || !editorRef.current) return;
     const md = getMarkdown(editorRef.current);
     try {
-      await downloadMarkdown(currentNote.title, md);
+      await downloadMarkdown(md, currentNote.title);
       toast.success("Markdown saved");
     } catch (err) {
       toast.error("Failed to save markdown");
@@ -603,7 +604,10 @@ export function Editor({
         return false;
       },
     },
-    onUpdate: () => { scheduleSave(); },
+    onUpdate: () => {
+      if (isSettingContentRef.current) return;
+      scheduleSave();
+    },
     onSelectionUpdate: () => { closeLinkPopup(); },
   });
 
@@ -621,7 +625,12 @@ export function Editor({
     const scrollContainer = scrollContainerRef.current;
     let prevScrollTop = 0;
     if (scrollContainer) prevScrollTop = scrollContainer.scrollTop;
-    editor.chain().focus().setContent(currentNote.content, { contentType: "markdown" } as any).run();
+    isSettingContentRef.current = true;
+    try {
+      editor.chain().focus().setContent(currentNote.content, { contentType: "markdown" } as any).run();
+    } finally {
+      isSettingContentRef.current = false;
+    }
     if (scrollContainer) scrollContainer.scrollTop = prevScrollTop;
     if (loadedNoteIdRef.current === currentNote.id) {
       const maxPos = editor.state.doc.content.size;

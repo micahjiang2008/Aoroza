@@ -74,24 +74,7 @@ export async function updateSettings(settings: Settings): Promise<void> {
   return invoke("update_settings", { newSettings: settings });
 }
 
-export async function updateGitEnabled(
-  enabled: boolean,
-  expectedFolder: string,
-): Promise<void> {
-  return invoke("update_git_enabled", { enabled, expectedFolder });
-}
 
-export interface SearchResult {
-  id: string;
-  title: string;
-  preview: string;
-  modified: number;
-  score: number;
-}
-
-export async function searchNotes(query: string): Promise<SearchResult[]> {
-  return invoke("search_notes", { query });
-}
 
 export async function startFileWatcher(): Promise<void> {
   return invoke("start_file_watcher");

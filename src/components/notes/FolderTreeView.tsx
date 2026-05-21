@@ -54,7 +54,7 @@ const FileItem = memo(function FileItem({
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
         <div ref={itemRef}
-          className={`flex items-center gap-1.5 py-1.5 cursor-pointer rounded-md select-none transition-colors ${isSelected ? "bg-bg-muted" : "hover:bg-bg-muted"}`}
+          className={`flex items-center gap-1.5 py-1 cursor-pointer rounded-md select-none transition-colors ${isSelected ? "bg-bg-muted" : "hover:bg-bg-muted"}`}
           style={{ paddingLeft: `${depth * 12 + 8}px`, paddingRight: "8px" }}
           onClick={handleClick} role="button" tabIndex={-1}>
           <NoteIcon className="w-4 h-4 stroke-[1.6] opacity-50 shrink-0" />
@@ -108,7 +108,7 @@ const FolderItemComponent = memo(function FolderItem({
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
         <div>
-          <div className="flex items-center gap-1.5 py-1.5 cursor-pointer rounded-md select-none transition-colors hover:bg-bg-muted"
+          <div className="flex items-center gap-1.5 py-1 cursor-pointer rounded-md select-none transition-colors hover:bg-bg-muted"
             style={{ paddingLeft: `${depth * 12 + 8}px`, paddingRight: "8px" }}
             onClick={handleClick} role="button" tabIndex={-1}>
             {isCollapsed

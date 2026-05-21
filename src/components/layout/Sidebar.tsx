@@ -4,8 +4,9 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useNotes } from "../../context/NotesContext";
 import { NoteList } from "../notes/NoteList";
 import { Footer } from "./Footer";
+import { invoke } from "@tauri-apps/api/core";
 import { IconButton } from "../ui";
-import { PlusIcon, AddNoteIcon, FolderPlusIcon } from "../icons";
+import { PlusIcon, AddNoteIcon, FolderPlusIcon, FoldersIcon } from "../icons";
 import { mod, isMac } from "../../lib/platform";
 import { FolderNameDialog } from "../notes/FolderNameDialog";
 import { useState } from "react";
@@ -15,10 +16,24 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onOpenSettings }: SidebarProps) {
-  const { createNote, createFolder, notes, selectedNoteId } = useNotes();
+  const { createNote, createFolder, notes, selectedNoteId, notesFolder, setNotesFolder } = useNotes();
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [folderDialogParent, setFolderDialogParent] = useState("");
+
+  const handleChangeFolder = useCallback(async () => {
+    try {
+      const selected = await invoke<string | null>("open_folder_dialog", {
+        defaultPath: notesFolder || null,
+      });
+      if (selected) {
+        await setNotesFolder(selected);
+      }
+    } catch (err) {
+      console.error("Failed to select folder:", err);
+      toast.error("Failed to select folder");
+    }
+  }, [notesFolder, setNotesFolder]);
 
   const handleNewFolder = useCallback(() => {
     const lastSlash = selectedNoteId?.lastIndexOf("/") ?? -1;
@@ -75,6 +90,9 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          <IconButton variant="ghost" title="Change Folder" onClick={handleChangeFolder}>
+            <FoldersIcon className="w-5 h-5 stroke-[1.4]" />
+          </IconButton>
         </div>
       </div>
 

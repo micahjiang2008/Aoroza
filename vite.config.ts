@@ -25,5 +25,22 @@ export default defineConfig(() => ({
     minify: "esbuild",
     sourcemap: false,
     chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("beautiful-mermaid") || id.includes("mermaid")) {
+              return "mermaid";
+            }
+            if (id.includes("katex")) {
+              return "katex";
+            }
+            if (id.includes("highlight.js") || id.includes("lowlight")) {
+              return "highlight";
+            }
+          }
+        },
+      },
+    },
   },
 }));

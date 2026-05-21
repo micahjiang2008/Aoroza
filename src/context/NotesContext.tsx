@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { Note, NoteMetadata } from "../types/note";
 import * as notesService from "../services/notes";
+import { listen } from "@tauri-apps/api/event";
 
 interface NotesContextValue {
   notes: NoteMetadata[];
@@ -55,6 +56,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
         if (folder) {
           const list = await notesService.listNotes();
           setNotes(list);
+          await notesService.startFileWatcher().catch(console.error);
         }
       } catch {
         // stay in no-folder state
@@ -74,6 +76,39 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       console.error("Failed to refresh notes:", err);
     }
   }, [notesFolder]);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+    let debounceTimer: number | null = null;
+
+    async function setupListener() {
+      try {
+        unlistenFn = await listen("file-changed", () => {
+          if (debounceTimer) {
+            window.clearTimeout(debounceTimer);
+          }
+          debounceTimer = window.setTimeout(async () => {
+            await refreshNotes();
+          }, 300);
+        });
+      } catch (err) {
+        console.error("Failed to listen to file-changed event:", err);
+      }
+    }
+
+    if (notesFolder) {
+      setupListener();
+    }
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+      if (debounceTimer) {
+        window.clearTimeout(debounceTimer);
+      }
+    };
+  }, [notesFolder, refreshNotes]);
 
   const selectNote = useCallback(async (id: string) => {
     setSelectedNoteId(id);
@@ -149,6 +184,7 @@ export function NotesProvider({ children }: { children: ReactNode }) {
       setNotesFolderState(path);
       const list = await notesService.listNotes();
       setNotes(list);
+      await notesService.startFileWatcher().catch(console.error);
     } catch (err) {
       console.error("Failed to set notes folder:", err);
     }

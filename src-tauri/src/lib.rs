@@ -68,7 +68,8 @@ pub struct Note {
 
 pub struct AppState {
     pub app_config: RwLock<AppConfig>,
-    pub preview_file_path: RwLock<Option<String>>,
+    pub preview_file_paths: RwLock<HashMap<String, String>>,
+    pub watcher: RwLock<Option<(notify::RecommendedWatcher, PathBuf)>>,
 }
 // ── Config paths ─────────────────────────────────────────────────────────
 
@@ -342,12 +343,16 @@ fn validate_preview_path(path: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn create_preview_window(app: &tauri::AppHandle, file_path: &str) -> Result<(), String> {
+fn get_preview_window_label(file_path: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     file_path.hash(&mut hasher);
-    let label = format!("preview-{:x}", hasher.finish());
+    format!("preview-{:x}", hasher.finish())
+}
+
+fn create_preview_window(app: &tauri::AppHandle, file_path: &str) -> Result<(), String> {
+    let label = get_preview_window_label(file_path);
     if let Some(window) = app.get_webview_window(&label) {
         window.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
@@ -355,8 +360,8 @@ fn create_preview_window(app: &tauri::AppHandle, file_path: &str) -> Result<(), 
     let filename = PathBuf::from(file_path)
         .file_name().map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Preview".to_string());
-    // Use root URL — no query params (PathBuf on Windows mangles ? & characters)
-    let builder = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("/".into()))
+    // Use index.html to avoid 404/blank page when resolving route in production
+    let builder = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
         .title(format!("{} \u{2014} SimpleMD", filename))
         .inner_size(800.0, 600.0)
         .min_inner_size(400.0, 300.0)
@@ -741,17 +746,97 @@ fn import_file_to_folder(
 fn open_file_preview(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let file_path = PathBuf::from(&path);
     if !file_path.exists() { return Err(format!("File not found: {}", path)); }
-    // Store the preview file path so the frontend can detect preview mode
+    // Store the preview file path mapped to the window label
     if let Some(state) = app.try_state::<AppState>() {
-        *state.preview_file_path.write().unwrap() = Some(path.clone());
+        let label = get_preview_window_label(&path);
+        state.preview_file_paths.write().unwrap().insert(label, path.clone());
     }
     create_preview_window(&app, &path)?;
     Ok(())
 }
 
 #[tauri::command]
-fn get_preview_file(state: State<'_, AppState>) -> Option<String> {
-    state.preview_file_path.read().unwrap().clone()
+fn get_preview_file(window: tauri::Window, state: State<'_, AppState>) -> Option<String> {
+    let label = window.label();
+    state.preview_file_paths.read().unwrap().get(label).cloned()
+}
+
+#[tauri::command]
+fn start_file_watcher(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    use notify::{Watcher, RecursiveMode};
+
+    let folder = get_notes_folder_path(&state)?;
+    
+    // Check if we are already watching this folder
+    {
+        let watcher_guard = state.watcher.read().map_err(|e| e.to_string())?;
+        if let Some((_, current_path)) = &*watcher_guard {
+            if current_path == &folder {
+                return Ok(()); // Already watching this path
+            }
+        }
+    }
+
+    // Stop and drop existing watcher
+    {
+        let mut watcher_guard = state.watcher.write().map_err(|e| e.to_string())?;
+        *watcher_guard = None;
+    }
+
+    // Build the list of ignored directories to be captured by the closure
+    let settings = state.app_config.read().ok().and_then(|c| c.settings.clone()).unwrap_or_default();
+    let ignored_dirs = get_effective_ignored_dirs(&settings);
+    let folder_clone = folder.clone();
+    let app_clone = app.clone();
+
+    // Create watcher
+    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        if let Ok(event) = res {
+            // Check if any of the affected paths are Markdown files or directories, and not in ignored paths
+            let has_valid_changes = event.paths.iter().any(|p| {
+                if let Ok(rel) = p.strip_prefix(&folder_clone) {
+                    for comp in rel.components() {
+                        if let std::path::Component::Normal(name) = comp {
+                            if let Some(s) = name.to_str() {
+                                if EXCLUDED_DIRS.contains(&s) || ignored_dirs.iter().any(|d| d == s) {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                    // Filter: if path has an extension, it must be "md"
+                    let has_extension = p.extension().is_some();
+                    if has_extension && p.extension().and_then(|e| e.to_str()) != Some("md") {
+                        return false;
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
+
+            if has_valid_changes {
+                // Emit event to all webviews
+                let _ = app_clone.emit("file-changed", ());
+            }
+        }
+    }).map_err(|e| e.to_string())?;
+
+    // Start watching
+    watcher.watch(&folder, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
+
+    // Store the watcher
+    {
+        let mut watcher_guard = state.watcher.write().map_err(|e| e.to_string())?;
+        *watcher_guard = Some((watcher, folder));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn write_file(path: String, contents: Vec<u8>) -> Result<(), String> {
+    std::fs::write(Path::new(&path), contents).map_err(|e| e.to_string())
 }
 
 // ── Application entrypoint ───────────────────────────────────────────────
@@ -762,11 +847,56 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.len() > 1 {
+                let file_path = &args[1];
+                if file_path.ends_with(".md") || file_path.ends_with(".markdown") {
+                    let path = PathBuf::from(file_path);
+                    if path.exists() && path.is_file() {
+                        let path_str = path.to_string_lossy().into_owned();
+                        let label = get_preview_window_label(&path_str);
+                        if let Some(state) = app.try_state::<AppState>() {
+                            state.preview_file_paths.write().unwrap().insert(label, path_str.clone());
+                        }
+                        let _ = create_preview_window(app, &path_str);
+                        return;
+                    }
+                }
+            }
             let _ = app.get_webview_window("main").map(|w| w.set_focus());
         }))
-        .setup(|_app| {
-            _app.manage(AppState { app_config: RwLock::new(load_config()), preview_file_path: RwLock::new(None) });
+        .setup(|app| {
+            app.manage(AppState {
+                app_config: RwLock::new(load_config()),
+                preview_file_paths: RwLock::new(HashMap::new()),
+                watcher: RwLock::new(None),
+            });
+
+            // Handle CLI arguments on startup
+            let args: Vec<String> = std::env::args().collect();
+            let mut has_file_arg = false;
+            if args.len() > 1 {
+                let file_path = &args[1];
+                if file_path.ends_with(".md") || file_path.ends_with(".markdown") {
+                    let path = PathBuf::from(file_path);
+                    if path.exists() && path.is_file() {
+                        let path_str = path.to_string_lossy().into_owned();
+                        let label = get_preview_window_label(&path_str);
+                        if let Some(state) = app.try_state::<AppState>() {
+                            state.preview_file_paths.write().unwrap().insert(label, path_str.clone());
+                        }
+                        let _ = create_preview_window(app.handle(), &path_str);
+                        has_file_arg = true;
+                    }
+                }
+            }
+
+            if !has_file_arg {
+                if let Some(main_window) = app.get_webview_window("main") {
+                    let _ = main_window.show();
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -778,7 +908,8 @@ pub fn run() {
             preview_note_name, get_default_ignored_patterns,
             open_folder_dialog, open_in_file_manager, copy_to_clipboard,
             read_file_direct, save_file_direct, import_file_to_folder,
-            open_file_preview, get_preview_file,
+            open_file_preview, get_preview_file, start_file_watcher,
+            write_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -89,7 +89,7 @@ export function AboutSettingsSection() {
       <section className="pb-2">
         <h2 className="text-xl font-medium mb-0.5">About</h2>
         <p className="text-sm text-text-muted mb-4 leading-relaxed">
-          A quiet place to write. No cloud, no vault, no accounts — just you and the page.
+          A quiet place to write. No cloud, no vault, no accounts. Just you and the page.
           Keyboard-first, offline-native, and yours forever.
         </p>
         <p className="text-sm text-text-muted mb-4">

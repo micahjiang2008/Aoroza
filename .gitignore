@@ -33,3 +33,6 @@ src-tauri/gen/
 
 # Release artifacts
 latest.json
+
+# Local docs (not for GitHub)
+docs/

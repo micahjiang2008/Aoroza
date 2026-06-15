@@ -31,19 +31,22 @@ function AppContent() {
     const doCheck = async () => {
       try {
         const update = await check();
-        if (update?.available) {
-          toast.info(`Aoroza ${update.version} is available`, {
-            description: "Downloading update…",
-            duration: 5000,
+        if (update) {
+          const toastId = toast.loading(`Downloading Aoroza ${update.version}…`, { duration: Infinity });
+          let downloaded = 0, total = 0;
+          await update.download((progress) => {
+            if (progress.event === "Started") total = progress.data.contentLength ?? 0;
+            else if (progress.event === "Progress") {
+              downloaded += progress.data.chunkLength;
+              if (total > 0) toast.loading(`Downloading Aoroza ${update.version} (${Math.round((downloaded / total) * 100)}%)…`, { id: toastId, duration: Infinity });
+            }
           });
-          await update.downloadAndInstall();
+          toast.success(`Aoroza ${update.version} ready! Restarting…`, { id: toastId, duration: 3000 });
+          await update.install();
           await relaunch();
         }
-      } catch {
-        // Silently ignore — updater not configured or network unavailable
-      }
+      } catch { /* ignore */ }
     };
-    // Delay to let the app paint first
     const timer = setTimeout(doCheck, 2000);
     return () => clearTimeout(timer);
   }, []);

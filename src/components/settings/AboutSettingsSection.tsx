@@ -22,11 +22,26 @@ export function AboutSettingsSection() {
     try {
       const update = await check();
       if (update) {
-        toast.info(`Aoroza ${update.version} is available`, {
-          description: "Downloading and installing…",
-          duration: 5000,
+        const toastId = toast.loading(`Downloading Aoroza ${update.version}…`, {
+          duration: Infinity,
         });
-        await update.downloadAndInstall();
+        let downloaded = 0;
+        let total = 0;
+        await update.download((progress) => {
+          if (progress.event === "Started") {
+            total = progress.data.contentLength ?? 0;
+          } else if (progress.event === "Progress") {
+            downloaded += progress.data.chunkLength;
+            if (total > 0) {
+              toast.loading(
+                `Downloading Aoroza ${update.version} (${Math.round((downloaded / total) * 100)}%)…`,
+                { id: toastId, duration: Infinity },
+              );
+            }
+          }
+        });
+        toast.success(`Aoroza ${update.version} ready! Restarting…`, { id: toastId, duration: 3000 });
+        await update.install();
         await relaunch();
       } else {
         toast.success("You're on the latest version!");

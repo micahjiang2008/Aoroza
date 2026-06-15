@@ -1,8 +1,10 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -56,8 +58,13 @@ pub struct ThemeSchema {
     pub mode: String,
 }
 
+pub struct InlineSession {
+    pub child: Option<Child>,
+}
+
 pub struct AppState {
     pub app_config: RwLock<AppConfig>,
+    pub inline_session: Mutex<InlineSession>,
 }
 
 // ── Config paths ─────────────────────────────────────────────────────────
@@ -315,6 +322,209 @@ fn file_mtime(path: String) -> Result<Option<i64>, String> {
         .ok_or("Failed to read mtime".to_string())
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────
+
+/// Create a Command that won't pop up a console window on Windows.
+fn no_window_cmd(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+// ── Inline AI Generator ────────────────────────────────────────────────
+
+/// Find pi's node.exe and cli.js; cached for the app lifetime.
+fn find_pi_node_and_script() -> (String, String) {
+    // Returns (node_exe, cli_js_path)
+    let pi_cmd = {
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                let cmd = format!("{}\\npm\\pi.cmd", appdata);
+                if Path::new(&cmd).exists() {
+                    Some(cmd)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    };
+
+    // From pi.cmd, extract the npm prefix and locate cli.js
+    if let Some(cmd_path) = pi_cmd {
+        // pi.cmd is at: %APPDATA%\npm\pi.cmd
+        // The npm prefix is the parent: %APPDATA%\npm
+        if let Some(npm_dir) = Path::new(&cmd_path).parent() {
+            let cli_js = npm_dir.join("node_modules").join("@earendil-works").join("pi-coding-agent").join("dist").join("cli.js");
+            if cli_js.exists() {
+                // Try npm's bundled node first
+                let bundled_node = npm_dir.join("node.exe");
+                let node_exe = if bundled_node.exists() {
+                    bundled_node.to_string_lossy().to_string()
+                } else {
+                    "node".to_string()
+                };
+                return (node_exe, cli_js.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Fallback: use 'pi' command directly
+    ("pi".to_string(), String::new())
+}
+
+#[tauri::command]
+async fn inline_generate(
+    app: tauri::AppHandle,
+    prompt: String,
+    cwd: String,
+) -> Result<String, String> {
+    let (node_exe, cli_js) = find_pi_node_and_script();
+    let _ = app.emit("inline:debug", serde_json::json!({
+        "msg": format!("Using: {} {}", node_exe, cli_js),
+    }));
+
+    let stdin_input = format!("{}\n", serde_json::json!({
+        "id": "inline-prompt",
+        "type": "prompt",
+        "message": prompt
+    }));
+
+    let mut cmd_builder = if !cli_js.is_empty() {
+        let mut c = no_window_cmd(&node_exe);
+        c.arg(&cli_js).arg("--mode").arg("json").arg("--no-session");
+        c.current_dir(Path::new(&cwd));
+        c
+    } else {
+        let mut c = no_window_cmd(&node_exe);
+        c.args(["--mode", "json", "--no-session"]);
+        c.current_dir(Path::new(&cwd));
+        c
+    };
+
+    let timeout_duration = std::time::Duration::from_secs(120);
+    let app_clone = app.clone();
+
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        let process = cmd_builder
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start pi: {}", e))?;
+
+        let _child_id = process.id();
+        let child_arc = Arc::new(Mutex::new(process));
+
+        // Write prompt to stdin, then close
+        {
+            let mut guard = child_arc.lock().map_err(|e| format!("Lock error: {}", e))?;
+            if let Some(mut stdin) = guard.stdin.take() {
+                if let Err(e) = stdin.write_all(stdin_input.as_bytes()) {
+                    drop(guard);
+                    if let Ok(mut g) = child_arc.lock() { let _ = g.kill(); let _ = g.wait(); }
+                    return Err(format!("Failed to write to pi stdin: {}", e));
+                }
+            }
+        }
+
+        let stdout_handle = child_arc.lock().map_err(|e| format!("Lock error: {}", e))?.stdout.take();
+        let stderr_handle = child_arc.lock().map_err(|e| format!("Lock error: {}", e))?.stderr.take();
+
+        let mut stdout_str = String::new();
+        if let Some(mut out) = stdout_handle { let _ = out.read_to_string(&mut stdout_str); }
+        let mut stderr_str = String::new();
+        if let Some(mut err) = stderr_handle { let _ = err.read_to_string(&mut stderr_str); }
+
+        let success = child_arc.lock().ok().and_then(|mut g| g.wait().ok()).map(|s| s.success()).unwrap_or(false);
+
+        if !stderr_str.is_empty() {
+            let _ = app_clone.emit("inline:debug", serde_json::json!({
+                "msg": format!("pi stderr: {}", stderr_str.trim()),
+            }));
+        }
+        if !success {
+            return Err(format!("pi exited with error: {}", stderr_str.trim()));
+        }
+
+        let mut generated = String::new();
+        for raw_line in stdout_str.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() { continue; }
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
+                if event["type"].as_str() == Some("message_update") {
+                    if let Some(ae) = event.get("assistantMessageEvent") {
+                        if ae.get("type").and_then(|t| t.as_str()) == Some("text_delta") {
+                            if let Some(delta) = ae.get("delta").and_then(|d| d.as_str()) {
+                                generated.push_str(delta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if generated.is_empty() { return Err("AI did not generate any content".to_string()); }
+        let _ = app_clone.emit("inline:debug", serde_json::json!({"msg": format!("Generated {} chars", generated.len())}));
+        Ok(generated)
+    });
+
+    match tokio::time::timeout(timeout_duration, task).await {
+        Ok(join_result) => join_result.map_err(|e| format!("pi task error: {}", e))?,
+        Err(_) => Err("pi timed out after 120 seconds".to_string()),
+    }
+}
+
+#[tauri::command]
+fn pi_check() -> Result<bool, String> {
+    let (node_exe, cli_js) = find_pi_node_and_script();
+    if cli_js.is_empty() {
+        return Ok(false);
+    }
+    if !Path::new(&cli_js).exists() {
+        return Ok(false);
+    }
+    let status = no_window_cmd(&node_exe)
+        .arg("-e")
+        .arg("process.exit(0)")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    Ok(status)
+}
+
+#[tauri::command]
+fn pi_version() -> Result<String, String> {
+    let (node_exe, cli_js) = find_pi_node_and_script();
+    let script = if !cli_js.is_empty() {
+        cli_js
+    } else {
+        return Err("Pi not found".to_string());
+    };
+    let output = no_window_cmd(&node_exe)
+        .arg(&script)
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run pi --version: {}", e))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 // ── Application entrypoint ───────────────────────────────────────────────
 
 pub fn run() {
@@ -382,6 +592,7 @@ pub fn run() {
         .setup(|app| {
             app.manage(AppState {
                 app_config: RwLock::new(load_config()),
+                inline_session: Mutex::new(InlineSession { child: None }),
             });
 
             if let Some(main_window) = app.get_webview_window("main") {
@@ -439,6 +650,9 @@ pub fn run() {
             save_file_dialog,
             open_in_file_manager,
             file_mtime,
+            inline_generate,
+            pi_check,
+            pi_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

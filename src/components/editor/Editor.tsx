@@ -48,6 +48,7 @@ import {
   OutlineIcon, InfoIcon, MinusIcon, MaximizeIcon, XIcon,
 } from "../icons";
 import { Outline } from "./Outline";
+import { InlineGenerator } from "./InlineGenerator";
 
 // Icons kept for hidden toolbar buttons — restore when uncommenting header/format-bar JSX
 const _hiddenIcons = { CopyIcon, ShareIcon, MarkdownIcon, MarkdownOffIcon, DownloadIcon, OutlineIcon, InfoIcon, TableIcon, BracketsIcon };
@@ -137,6 +138,7 @@ export function Editor({
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const [outlineVisible, setOutlineVisible] = useState(false);
   const [statusBarVisible, setStatusBarVisible] = useState(false);
+  const [inlineGeneratorOpen, setInlineGeneratorOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<number | null>(null);
   const linkPopupRef = useRef<TippyInstance | null>(null);
@@ -551,9 +553,10 @@ export function Editor({
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3, 4] }, codeBlock: false, link: false }),
       Placeholder.configure({
+        showOnlyWhenEditable: false,
         placeholder: ({ node }) => {
           if (node.type.name === "heading" && node.attrs.level === 1) return "Untitled";
-          return "Start writing...";
+          return "Write something…";
         },
       }),
       LinkExtension.configure({
@@ -827,6 +830,13 @@ export function Editor({
     return () => window.removeEventListener("toggle-source-mode", handler);
   }, [toggleSourceMode]);
 
+  // Listen for open-inline-generator custom event from command palette
+  useEffect(() => {
+    const handler = () => setInlineGeneratorOpen(true);
+    window.addEventListener("open-inline-generator", handler);
+    return () => window.removeEventListener("open-inline-generator", handler);
+  }, []);
+
   // Listen for toggle-outline custom event from command palette
   useEffect(() => {
     const handler = () => toggleOutline();
@@ -1094,6 +1104,14 @@ export function Editor({
           <Outline editor={editor} scrollContainer={scrollContainerRef.current} />
         )}
       </div>
+
+      {/* Inline AI Generator */}
+      <InlineGenerator
+        editor={editor!}
+        open={inlineGeneratorOpen}
+        cwd={currentFilePath ? currentFilePath.replace(/[/\\][^/\\]+$/, "") || "." : "."}
+        onClose={() => setInlineGeneratorOpen(false)}
+      />
     </div>
   );
 }

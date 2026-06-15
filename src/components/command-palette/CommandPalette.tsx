@@ -19,6 +19,7 @@ import {
   OutlineIcon,
   InfoIcon,
   DownloadIcon,
+  PiIcon,
 } from "../icons";
 import { mod, shift } from "../../lib/platform";
 
@@ -90,6 +91,15 @@ export function CommandPalette({
         icon: <MarkdownIcon className="w-4.5 h-4.5 stroke-[1.5]" />,
         action: () => {
           window.dispatchEvent(new CustomEvent("toggle-source-mode"));
+          onClose();
+        },
+      },
+      {
+        id: "ai-edit-pi",
+        label: "Edit with Pi",
+        icon: <PiIcon className="w-4.5 h-4.5 text-text-muted" />,
+        action: () => {
+          window.dispatchEvent(new CustomEvent("open-inline-generator"));
           onClose();
         },
       },

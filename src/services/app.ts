@@ -6,6 +6,18 @@ export async function fileMtime(path: string): Promise<number | null> {
   return invoke("file_mtime", { path });
 }
 
+export async function inlineGenerate(prompt: string, cwd: string): Promise<string> {
+  return invoke("inline_generate", { prompt, cwd });
+}
+
+export async function checkPi(): Promise<boolean> {
+  return invoke("pi_check");
+}
+
+export async function getPiVersion(): Promise<string> {
+  return invoke("pi_version");
+}
+
 export async function newWindow(): Promise<void> {
   return invoke("new_window");
 }

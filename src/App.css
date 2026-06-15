@@ -338,6 +338,16 @@ html.dark {
   opacity: 0;
 }
 
+/* TipTap placeholder visibility */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+  pointer-events: none;
+  height: 0;
+}
+
 /* Editor layout - max-width from settings */
 .ProseMirror {
   max-width: var(--editor-max-width, 48rem) !important;
